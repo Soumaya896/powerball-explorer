@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Powerball Explorer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>🎱 Powerball Explorer</h1>
+      <p class="sub">Browse, search and analyse Powerball drawings</p>
+    </div>
+    <div class="badges">
+      <span id="modeBadge" class="badge">…</span>
+      <span id="serverBadge" class="badge" title="Which web server answered your request">server: …</span>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" role="alert" hidden></div>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="draws" role="tab">Drawings</button>
+    <button class="tab" data-tab="stats" role="tab">Statistics</button>
+    <button class="tab" data-tab="checker" role="tab">Ticket checker</button>
+    <button class="tab" data-tab="quick" role="tab">Quick Pick</button>
+  </nav>
+
+  <main>
+    <!-- DRAWINGS -->
+    <section id="tab-draws" class="panel">
+      <div class="card controls">
+        <label>Load
+          <select id="source">
+            <option value="latest">Latest drawing</option>
+            <option value="latest10" selected>Latest 10 drawings</option>
+            <option value="all">All drawings</option>
+            <option value="between">Between two dates…</option>
+            <option value="date">A specific date…</option>
+          </select>
+        </label>
+        <label id="fromWrap" hidden>From <input type="date" id="fromDate"></label>
+        <label id="toWrap" hidden>To <input type="date" id="toDate"></label>
+        <label id="dateWrap" hidden>Date <input type="date" id="oneDate"></label>
+        <button id="loadBtn" class="primary">Load drawings</button>
+      </div>
+
+      <div class="card controls">
+        <label class="grow">Search (number or date)
+          <input type="search" id="search" placeholder="e.g. 23 or 2025-08">
+        </label>
+        <label>Powerball
+          <select id="pbFilter"><option value="">Any</option></select>
+        </label>
+        <label>Multiplier
+          <select id="multFilter"><option value="">Any</option></select>
+        </label>
+        <label>Year
+          <select id="yearFilter"><option value="">Any</option></select>
+        </label>
+        <label>Sort by
+          <select id="sortBy">
+            <option value="date-desc">Date (newest)</option>
+            <option value="date-asc">Date (oldest)</option>
+            <option value="pb-asc">Powerball (low → high)</option>
+            <option value="pb-desc">Powerball (high → low)</option>
+            <option value="sum-asc">Sum of numbers (low → high)</option>
+            <option value="sum-desc">Sum of numbers (high → low)</option>
+          </select>
+        </label>
+        <button id="resetBtn">Reset filters</button>
+      </div>
+
+      <div id="status" class="status" aria-live="polite"></div>
+      <div id="results" class="results"></div>
+      <div class="pager" id="pager"></div>
+    </section>
+
+    <!-- STATS -->
+    <section id="tab-stats" class="panel" hidden>
+      <div class="card"><p id="statsNote" class="muted"></p></div>
+      <div class="grid2">
+        <div class="card"><h2>Most drawn numbers</h2><div id="hotChart"></div></div>
+        <div class="card"><h2>Least drawn numbers</h2><div id="coldChart"></div></div>
+        <div class="card"><h2>Most drawn Powerballs</h2><div id="pbChart"></div></div>
+        <div class="card"><h2>Overdue numbers</h2><p class="muted small">Draws since each number last appeared.</p><div id="overdueChart"></div></div>
+      </div>
+    </section>
+
+    <!-- CHECKER -->
+    <section id="tab-checker" class="panel" hidden>
+      <div class="card">
+        <h2>Check your ticket</h2>
+        <p class="muted">Enter your numbers and the draw date (Mon, Wed or Sat).</p>
+        <div class="controls">
+          <label class="grow">5 white numbers (1-69, comma separated)
+            <input id="tNums" placeholder="5, 12, 23, 40, 61">
+          </label>
+          <label>Powerball (1-26) <input id="tPb" type="number" min="1" max="26"></label>
+          <label>Draw date <input id="tDate" type="date"></label>
+          <button id="checkBtn" class="primary">Check ticket</button>
+        </div>
+        <div id="checkResult" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- QUICK PICK -->
+    <section id="tab-quick" class="panel" hidden>
+      <div class="card center">
+        <h2>Random Quick Pick</h2>
+        <div id="quickBalls" class="balls"></div>
+        <button id="quickBtn" class="primary">Generate numbers</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Data: <a href="https://rapidapi.com/avoratechnology/api/powerball" target="_blank" rel="noopener">Powerball API by Avora Tech (RapidAPI)</a>.
+    For information only. Please play responsibly.
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>
