@@ -1,10 +1,10 @@
 # 🎱 Powerball Explorer
 
-A responsive Powerball results explorer built with Node.js, HTML, CSS and Javascript. It uses the DrawAnalystics API for real historical Powerball winning numbers and has no npm dependencies.
+A responsive Powerball results explorer built with Node.js, HTML, CSS and Javascript. It uses the DrawAnalytics API for real historical Powerball winning numbers and has no npm dependencies.
 
 - **GitHub:** https://github.com/Soumaya896/powerball-explorer
-- **Demo video (maximum 2 minutes):** 
-- **Deployed website (Lb01):** 
+- Demo video: https://youtu.be/_YksYOFHtXg 
+- **Deployed website (Lb01):** http://16.60.27.181 
 - **Author:** Soumaya (GitHub: [Soumaya896](https://github.com/Soumaya896))
 
 ## Why this application is useful
@@ -109,20 +109,16 @@ The backend calls the DrawAnalytics endpoint, normalizes its response into a con
 
 ## Deployment architecture
 
-```text
 Browser
    |
    v
-Lb01 (nginx, port 80, round-robin)
+Lb01 (HAProxy, port 80, round-robin)
    |                         |
    v                         v
-Web01 (nginx :80)         Web02 (nginx :80)
-   |                         |
-   v                         v
-Node app :3000            Node app :3000
-```
+Web01 (18.171.55.145:3000)   Web02 (35.178.40.132:3000)
+Node app (systemd service)   Node app (systemd service)
 
-The provided deployment script installs Node.js, nginx and Git, configures a `systemd` service for the Node application, and configures nginx on each web server as a reverse proxy.
+Each web server runs the Node.js app as a systemd service on port 3000, and Lb01 forwards traffic directly to that port. A helper script, `deploy/setup-webserver.sh`, is included to automate the setup.
 
 ### 1. Deploy to Web01 and Web02
 
@@ -153,32 +149,34 @@ curl -i http://localhost/api/health
 
 The JSON should show `"status":"ok"` and the appropriate server name. If the repository was already cloned by the script, do not clone it a second time; run the script from the repository's `deploy` directory.
 
-### 2. Configure Lb01
+### 2. Configure Lb01 (HAProxy)
 
-SSH to the load balancer:
-
-```bash
-ssh ubuntu@LB01_IP
-sudo apt-get update
-sudo apt-get install -y nginx
-```
-
-Copy the contents of `deploy/nginx-loadbalancer.conf` into:
+Lb01 (16.60.27.181) already runs HAProxy, so I changed its existing config to send traffic to port 3000 on both web servers:
 
 ```bash
-sudo nano /etc/nginx/sites-available/powerball-lb
+ssh ubuntu@16.60.27.181
+sudo cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.bak
+sudo nano /etc/haproxy/haproxy.cfg
 ```
 
-Replace `WEB01_IP` and `WEB02_IP` with the real private IP addresses of the two web servers. Then enable the configuration:
+The backend section is:
+
+```text
+backend web_servers
+    balance roundrobin
+    option httpchk GET /api/health
+    server web-01 18.171.55.145:3000 check
+    server web-02 35.178.40.132:3000 check
+```
+
+Check the file and reload HAProxy:
 
 ```bash
-sudo ln -sf /etc/nginx/sites-available/powerball-lb /etc/nginx/sites-enabled/powerball-lb
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t
-sudo systemctl reload nginx
+sudo haproxy -c -f /etc/haproxy/haproxy.cfg
+sudo systemctl reload haproxy
 ```
 
-The configuration uses nginx's default round-robin upstream selection and retries another upstream for selected connection and server errors. `deploy/haproxy.cfg` is an alternative configuration if the course load balancer uses HAProxy instead of nginx; do not configure both at the same time.
+Round-robin alternates requests between the two servers. The health check on `/api/health` stops sending traffic to a server that is down. `deploy/nginx-loadbalancer.conf` is an alternative for nginx-based load balancers and was not used here.
 
 ### 3. Verify load balancing
 
@@ -202,7 +200,6 @@ Then request the load balancer URL again. Restore it afterward:
 sudo systemctl start powerball
 ```
 
-Actual IP addresses and successful deployment must be filled in and verified in the course environment; they are not included in this repository because they are assigned by the course.
 
 ## Security and reliability
 
@@ -226,7 +223,7 @@ Actual IP addresses and successful deployment must be filled in and verified in 
 
 ## Credits
 
-- DrawAnalytics: [Powerball results data] (https://www.drawanalytics.com).
+- DrawAnalytics: [Powerball results data](https://www.drawanalytics.com).
 - Node.js: https://nodejs.org/.
 - nginx: https://nginx.org/.
 - Powerball prize information: https://www.powerball.com/powerball-prize-chart.
