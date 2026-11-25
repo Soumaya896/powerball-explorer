@@ -81,7 +81,7 @@ $('loadBtn').addEventListener('click', loadDraws);
 function setMode(source) {
   const b = $('modeBadge');
   const demo = source === 'demo';
-  b.textContent = demo ? 'Demo data (no API key set)' : 'Live API data' + (source === 'cache' ? ' (cached)' : source === 'stale-cache' ? ' (saved copy)' : '');
+  b.textContent = demo ? 'Demo sample data' : 'Live API data' + (source === 'cache' ? ' (cached)' : source === 'stale-cache' ? ' (saved copy)' : '');
   b.className = 'badge ' + (demo ? 'demo' : 'live');
 }
 
@@ -232,7 +232,7 @@ $('quickBtn').addEventListener('click', async () => {
   const from = new Date(); from.setMonth(from.getMonth() - 1); $('fromDate').value = from.toISOString().slice(0, 10);
   try {
     const h = await api('health');
-    $('modeBadge').textContent = h.mode === 'demo' ? 'Demo data (no API key set)' : 'Live API data';
+    $('modeBadge').textContent = h.mode === 'demo' ? 'Demo sample data' : 'Live API data';
     $('modeBadge').className = 'badge ' + (h.mode === 'demo' ? 'demo' : 'live');
     $('serverBadge').textContent = 'server: ' + h.server;
   } catch (e) { showBanner(e.message); }

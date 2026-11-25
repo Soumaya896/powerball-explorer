@@ -1,12 +1,14 @@
 {
   "name": "powerball-explorer",
   "version": "1.0.0",
-  "description": "Powerball results explorer: search, sort, filter, statistics and ticket checker, powered by the Powerball API on RapidAPI.",
+  "description": "Powerball results explorer using New York State public Open Data: search, filters, statistics and ticket checking.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "test": "node --test test/test.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT"
 }

@@ -21,7 +21,7 @@ if [ -d "$APP_DIR/.git" ]; then git -C "$APP_DIR" pull --ff-only; else git clone
 
 if [ ! -f "$APP_DIR/.env" ]; then
   cp "$APP_DIR/.env.example" "$APP_DIR/.env"
-  echo ">>> Created $APP_DIR/.env - EDIT IT NOW and put your API_KEY in it:  sudo nano $APP_DIR/.env"
+  echo ">>> Created $APP_DIR/.env with public data source defaults (no API key required)."
 fi
 grep -q '^SERVER_NAME=' "$APP_DIR/.env" || echo "SERVER_NAME=$SERVER_NAME" >> "$APP_DIR/.env"
 chmod 600 "$APP_DIR/.env"
