@@ -3,13 +3,13 @@
 A responsive Powerball results explorer built with Node.js, HTML, CSS and Javascript. It uses the DrawAnalystics API for real historical Powerball winning numbers and has no npm dependencies.
 
 - **GitHub:** https://github.com/Soumaya896/powerball-explorer
-- **Demo video (maximum 2 minutes):** add your video URL here after recording
-- **Deployed website (Lb01):** add your Lb01 public IP or domain after deployment
+- **Demo video (maximum 2 minutes):** 
+- **Deployed website (Lb01):** 
 - **Author:** Soumaya (GitHub: [Soumaya896](https://github.com/Soumaya896))
 
 ## Why this application is useful
 
-The application gives users one place to browse historical Powerball drawings, search and filter results, explore number frequencies, generate a valid random ticket and compare a ticket with a selected historical drawing. It is an informational tool only: past results do not predict future lottery outcomes.
+One place to browse historical Powerball drawings, search and filter them, explore number frequencies, generate a random ticket and compare a ticket with a past drawing. It is informational only: past results do not predict future outcomes.
 
 ## Features
 
@@ -233,7 +233,7 @@ Actual IP addresses and successful deployment must be filled in and verified in 
 
 ## Login credentials
 
-There is no application login or password. The application is public and read-only.
+None. The application is public and read-only.
 
 ## Disclaimer
 
