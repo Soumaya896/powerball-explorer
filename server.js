@@ -1,4 +1,3 @@
-
 'use strict';
 
 /**
@@ -20,12 +19,15 @@ const { buildMock } = require('./lib/mock');
 
 loadEnv();
 
+const DEFAULT_API_BASE = 'https://www.drawanalytics.com/api/v1/california/powerball/results';
+const PAGE_SIZE = 100;
+const MAX_RESULTS = 5000;
+const REQUEST_TIMEOUT_MS = 10000;
+const MAX_ATTEMPTS = 2;
+
 const cfg = () => ({
   port: Number(process.env.PORT) || 3000,
-  base: (
-    process.env.API_BASE_URL ||
-    'https://www.drawanalytics.com/api/v1/california/powerball/results'
-  ).replace(/\/$/, ''),
+  base: (process.env.API_BASE_URL || DEFAULT_API_BASE).replace(/\/$/, ''),
   ttl: (Number(process.env.CACHE_TTL) || 300) * 1000,
   mock: String(process.env.USE_MOCK).toLowerCase() === 'true',
 });
@@ -43,7 +45,13 @@ const MIME = {
   '.png': 'image/png',
 };
 
-/* ---------- small helpers ---------- */
+const COMMON_HEADERS = {
+  'X-Served-By': SERVER_NAME,
+  'X-Content-Type-Options': 'nosniff',
+};
+
+const STATIC_CSP =
+  "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:";
 
 class ApiError extends Error {
   constructor(status, message, code) {
@@ -53,187 +61,218 @@ class ApiError extends Error {
   }
 }
 
-const isDate = (s) =>
-  /^\d{4}-\d{2}-\d{2}$/.test(s) &&
-  !isNaN(new Date(s + 'T00:00:00Z')) &&
-  new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
+const validationError = (message) => new ApiError(400, message, 'validation');
+
+const noDrawError = (date) =>
+  new ApiError(404, `No Powerball drawing took place on ${date}.`, 'not_found');
+
+const RETRYABLE_CODES = new Set(['upstream', 'timeout', 'network']);
+
+const STABLE_FALLBACK_CODES = new Set([
+  'upstream',
+  'network',
+  'timeout',
+  'rate_limit',
+]);
+
+function isDate(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const parsed = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === s;
+}
+
+const randomInt = (min, max) =>
+  min + Math.floor(Math.random() * (max - min + 1));
 
 const cache = new Map();
 
-/* ---------- upstream access ---------- */
+function errorForStatus(status) {
+  if (status === 404) {
+    return new ApiError(
+      404,
+      'The DrawAnalytics endpoint was not found.',
+      'not_found'
+    );
+  }
+  if (status === 429) {
+    return new ApiError(
+      429,
+      'The data service rate limit was reached. Please wait and try again.',
+      'rate_limit'
+    );
+  }
+  if (status >= 500) {
+    return new ApiError(
+      502,
+      `The data service is having problems (HTTP ${status}).`,
+      'upstream'
+    );
+  }
+  return new ApiError(
+    502,
+    `Unexpected data service response (HTTP ${status}).`,
+    'upstream'
+  );
+}
+
+function toApiError(e) {
+  if (e instanceof ApiError) return e;
+  if (e.name === 'AbortError') {
+    return new ApiError(
+      504,
+      'The data service took too long to answer.',
+      'timeout'
+    );
+  }
+  return new ApiError(502, 'Could not reach the public data service.', 'network');
+}
+
+async function requestOnce(url) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    throw errorForStatus(res.status);
+  }
+
+  const body = await res.json();
+
+  if (body.success !== true || !Array.isArray(body.data)) {
+    throw new ApiError(
+      502,
+      'The data service returned an unexpected response.',
+      'bad_response'
+    );
+  }
+
+  return body;
+}
 
 async function fetchPage(url) {
   let lastErr;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10000);
-
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
-      const res = await fetch(url, {
-        headers: { Accept: 'application/json' },
-        signal: ctrl.signal,
-      });
-
-      clearTimeout(timer);
-
-      if (res.status === 404) {
-        throw new ApiError(
-          404,
-          'The DrawAnalytics endpoint was not found.',
-          'not_found'
-        );
-      }
-
-      if (res.status === 429) {
-        throw new ApiError(
-          429,
-          'The data service rate limit was reached. Please wait and try again.',
-          'rate_limit'
-        );
-      }
-
-      if (res.status >= 500) {
-        throw new ApiError(
-          502,
-          `The data service is having problems (HTTP ${res.status}).`,
-          'upstream'
-        );
-      }
-
-      if (!res.ok) {
-        throw new ApiError(
-          502,
-          `Unexpected data service response (HTTP ${res.status}).`,
-          'upstream'
-        );
-      }
-
-      const body = await res.json();
-
-      if (body.success !== true || !Array.isArray(body.data)) {
-        throw new ApiError(
-          502,
-          'The data service returned an unexpected response.',
-          'bad_response'
-        );
-      }
-
-      return body;
-
+      return await requestOnce(url);
     } catch (e) {
-      clearTimeout(timer);
-
-      if (e instanceof ApiError) {
-        if (e.code !== 'upstream') throw e;
-        lastErr = e;
-      } else if (e.name === 'AbortError') {
-        lastErr = new ApiError(
-          504,
-          'The data service took too long to answer.',
-          'timeout'
-        );
-      } else {
-        lastErr = new ApiError(
-          502,
-          'Could not reach the public data service.',
-          'network'
-        );
-      }
+      lastErr = toApiError(e);
+      if (!RETRYABLE_CODES.has(lastErr.code)) throw lastErr;
     }
   }
 
   throw lastErr;
 }
 
+const QUERY_BUILDERS = {
+  latest: () => ({ limit: 1, offset: 0 }),
+  latest10: () => ({ limit: 10, offset: 0 }),
+  all: () => ({ limit: PAGE_SIZE, offset: 0 }),
+  date: ({ date }) => ({
+    start_date: date,
+    end_date: date,
+    limit: PAGE_SIZE,
+    offset: 0,
+  }),
+  between: ({ first_date, second_date }) => ({
+    start_date: first_date,
+    end_date: second_date,
+    limit: PAGE_SIZE,
+    offset: 0,
+  }),
+};
+
+function buildUrl(base, query) {
+  const url = new URL(base);
+  for (const [key, value] of Object.entries(query)) {
+    url.searchParams.set(key, String(value));
+  }
+  return url;
+}
+
 async function callUpstream(kind, params = {}) {
-  const c = cfg();
+  const { base } = cfg();
 
-  const queries = {
-    latest: { limit: 1, offset: 0 },
-    latest10: { limit: 10, offset: 0 },
-    all: { limit: 100, offset: 0 },
-    date: {
-      start_date: params.date,
-      end_date: params.date,
-      limit: 100,
-      offset: 0,
-    },
-    between: {
-      start_date: params.first_date,
-      end_date: params.second_date,
-      limit: 100,
-      offset: 0,
-    },
-  };
-
-  const query = queries[kind];
-
-  if (!query) {
+  const makeQuery = QUERY_BUILDERS[kind];
+  if (!makeQuery) {
     throw new ApiError(500, 'Unknown data request.', 'configuration');
   }
+  const query = makeQuery(params);
 
-  const url = new URL(c.base);
-
-  Object.entries(query).forEach(([key, value]) => {
-    url.searchParams.set(key, String(value));
-  });
-
-  const firstPage = await fetchPage(url);
+  const firstPage = await fetchPage(buildUrl(base, query));
 
   const results = [...firstPage.data];
   const total = Math.min(
     Number(firstPage.meta?.total) || results.length,
-    5000
+    MAX_RESULTS
   );
 
-  // Fetch additional pages when more than 100 results are available.
-  for (let offset = 100; offset < total; offset += 100) {
-    const nextUrl = new URL(c.base);
-
-    Object.entries(query).forEach(([key, value]) => {
-      if (key !== 'offset') {
-        nextUrl.searchParams.set(key, String(value));
-      }
-    });
-
-    nextUrl.searchParams.set('limit', '100');
-    nextUrl.searchParams.set('offset', String(offset));
-
-    const nextPage = await fetchPage(nextUrl);
-    results.push(...nextPage.data);
+  for (let offset = PAGE_SIZE; offset < total; offset += PAGE_SIZE) {
+    const page = await fetchPage(
+      buildUrl(base, { ...query, limit: PAGE_SIZE, offset })
+    );
+    results.push(...page.data);
   }
 
-  return {
-    ...firstPage,
-    data: results,
-  };
+  return { ...firstPage, data: results };
 }
 
-/* ---------- fetch + normalize + cache ---------- */
+const specs = {
+  latest: () => ({
+    key: 'latest',
+    kind: 'latest',
+    params: {},
+    narrow: (draws) => draws.slice(0, 1),
+  }),
+  latest10: () => ({
+    key: 'latest10',
+    kind: 'latest10',
+    params: {},
+    narrow: (draws) => draws.slice(0, 10),
+  }),
+  all: () => ({
+    key: 'all',
+    kind: 'all',
+    params: {},
+    narrow: (draws) => draws,
+  }),
+  between: (from, to) => ({
+    key: `between:${from}:${to}`,
+    kind: 'between',
+    params: { first_date: from, second_date: to },
+    narrow: (draws) => draws.filter((d) => d.date >= from && d.date <= to),
+  }),
+  onDate: (date) => ({
+    key: `date:${date}`,
+    kind: 'date',
+    params: { date },
+    narrow: (draws) => draws.filter((d) => d.date === date),
+  }),
+};
 
-async function getDraws(cacheKey, template, params, mockFn) {
+async function getDraws({ key, kind, params, narrow }) {
   const c = cfg();
 
   if (c.mock) {
-    return {
-      draws: mockFn(buildMock()),
-      source: 'demo',
-    };
+    return { draws: narrow(buildMock()), source: 'demo' };
   }
+  const cached = cache.get(key);
 
-  const hit = cache.get(cacheKey);
-
-  if (hit && Date.now() - hit.at < c.ttl) {
-    return {
-      draws: hit.value,
-      source: 'cache',
-    };
+  if (cached && Date.now() - cached.at < c.ttl) {
+    return { draws: cached.value, source: 'cache' };
   }
 
   try {
-    const body = await callUpstream(template, params);
-    const draws = normalizeResponse(body);
+    const draws = normalizeResponse(await callUpstream(kind, params));
 
     if (!draws.length) {
       throw new ApiError(
@@ -243,91 +282,60 @@ async function getDraws(cacheKey, template, params, mockFn) {
       );
     }
 
-    cache.set(cacheKey, {
-      at: Date.now(),
-      value: draws,
-    });
-
-    return {
-      draws,
-      source: 'live',
-    };
-
+    cache.set(key, { at: Date.now(), value: draws });
+    return { draws, source: 'live' };
   } catch (e) {
-    if (
-      hit &&
-      ['upstream', 'network', 'timeout', 'rate_limit'].includes(e.code)
-    ) {
+    if (cached && STABLE_FALLBACK_CODES.has(e.code)) {
       return {
-        draws: hit.value,
+        draws: cached.value,
         source: 'stale-cache',
-        warning: e.message + ' Showing previously saved results.',
+        warning: `${e.message} Showing previously saved results.`,
       };
     }
-
     throw e;
   }
 }
 
-/* ---------- ticket checker ---------- */
+async function lookup(spec) {
+  const result = await getDraws(spec);
+  return { result, draws: spec.narrow(result.draws) };
+}
+
+const PRIZES = {
+  '5-1': 'JACKPOT',
+  '5-0': '$1,000,000',
+  '4-1': '$50,000',
+  '4-0': '$100',
+  '3-1': '$100',
+  '3-0': '$7',
+  '2-1': '$7',
+  '1-1': '$4',
+  '0-1': '$4',
+};
 
 function prize(whiteMatches, pbMatch) {
-  const t = {
-    '5-1': ['JACKPOT', 'Jackpot'],
-    '5-0': ['$1,000,000', '$1,000,000'],
-    '4-1': ['$50,000', '$50,000'],
-    '4-0': ['$100', '$100'],
-    '3-1': ['$100', '$100'],
-    '3-0': ['$7', '$7'],
-    '2-1': ['$7', '$7'],
-    '1-1': ['$4', '$4'],
-    '0-1': ['$4', '$4'],
-  };
-
-  const hit = t[`${whiteMatches}-${pbMatch ? 1 : 0}`];
-  return hit ? hit[0] : null;
+  return PRIZES[`${whiteMatches}-${pbMatch ? 1 : 0}`] ?? null;
 }
 
 function parseTicket(q) {
   const numbers = String(q.numbers || '')
-    .split(',')
-    .map((s) => Number(s.trim()));
-
+  .split(',')
+  .map((s) => Number(s.trim()));
   const pb = Number(q.powerball);
 
-  if (
-    numbers.length !== 5 ||
-    numbers.some((n) => !Number.isInteger(n) || n < 1 || n > 69)
-  ) {
-    throw new ApiError(
-      400,
-      'Enter exactly 5 white numbers between 1 and 69.',
-      'validation'
-    );
-  }
+  const outOfRange = (n) => !Number.isInteger(n) || n < 1 || n > 69;
 
+  if (numbers.length !== 5 || numbers.some(outOfRange)) {
+    throw validationError('Enter exactly 5 white numbers between 1 and 69.');
+  }
   if (new Set(numbers).size !== 5) {
-    throw new ApiError(
-      400,
-      'White numbers must all be different.',
-      'validation'
-    );
+    throw validationError('White numbers must all be different.');
   }
-
   if (!Number.isInteger(pb) || pb < 1 || pb > 26) {
-    throw new ApiError(
-      400,
-      'Powerball must be between 1 and 26.',
-      'validation'
-    );
+    throw validationError('Powerball must be between 1 and 26.');
   }
-
   if (!isDate(q.date || '')) {
-    throw new ApiError(
-      400,
-      'Enter the draw date as YYYY-MM-DD.',
-      'validation'
-    );
+    throw validationError('Enter the draw date as YYYY-MM-DD.');
   }
 
   return {
@@ -337,7 +345,21 @@ function parseTicket(q) {
   };
 }
 
-/* ---------- API routes ---------- */
+function meta(result) {
+  return {
+    server: SERVER_NAME,
+    source: result.source,
+    warning: result.warning || null,
+  };
+}
+
+function pack(result, draws) {
+  return {
+    ...meta(result),
+    count: draws.length,
+    draws,
+  };
+}
 
 const routes = {
   '/api/health': async () => ({
@@ -348,215 +370,117 @@ const routes = {
   }),
 
   '/api/latest': async () => {
-    const r = await getDraws(
-      'latest',
-      'latest',
-      {},
-      (m) => m.slice(0, 1)
-    );
-
-    return pack(r, r.draws.slice(0, 1));
+    const { result, draws } = await lookup(specs.latest());
+    return pack(result, draws);
   },
 
   '/api/latest10': async () => {
-    const r = await getDraws(
-      'latest10',
-      'latest10',
-      {},
-      (m) => m.slice(0, 10)
-    );
-
-    return pack(r, r.draws.slice(0, 10));
+    const { result, draws } = await lookup(specs.latest10());
+    return pack(result, draws);
   },
 
   '/api/all': async () => {
-    const r = await getDraws('all', 'all', {}, (m) => m);
-    return pack(r, r.draws);
+    const { result, draws } = await lookup(specs.all());
+    return pack(result, draws);
   },
 
   '/api/between': async (q) => {
     if (!isDate(q.from || '') || !isDate(q.to || '')) {
-      throw new ApiError(
-        400,
-        'Both dates must be valid and formatted YYYY-MM-DD.',
-        'validation'
-      );
+      throw validationError('Both dates must be valid and formatted YYYY-MM-DD.');
     }
-
     if (q.from > q.to) {
-      throw new ApiError(
-        400,
-        'The start date must be before the end date.',
-        'validation'
-      );
+      throw validationError('The start date must be before the end date.');
     }
 
-    const r = await getDraws(
-      `between:${q.from}:${q.to}`,
-      'between',
-      {
-        first_date: q.from,
-        second_date: q.to,
-      },
-      (m) => m.filter(
-        (d) => d.date >= q.from && d.date <= q.to
-      )
-    );
-
-    return pack(
-      r,
-      r.draws.filter(
-        (d) => d.date >= q.from && d.date <= q.to
-      )
-    );
+    const { result, draws } = await lookup(specs.between(q.from, q.to));
+    return pack(result, draws);
   },
 
   '/api/date': async (q) => {
     if (!isDate(q.date || '')) {
-      throw new ApiError(
-        400,
-        'Date must be valid and formatted YYYY-MM-DD.',
-        'validation'
-      );
+      throw validationError('Date must be valid and formatted YYYY-MM-DD.');
     }
 
-    const r = await getDraws(
-      `date:${q.date}`,
-      'date',
-      { date: q.date },
-      (m) => m.filter((d) => d.date === q.date)
-    );
+    const { result, draws } = await lookup(specs.onDate(q.date));
+    if (!draws.length) throw noDrawError(q.date);
 
-    const one = r.draws.filter((d) => d.date === q.date);
-
-    if (!one.length) {
-      throw new ApiError(
-        404,
-        `No Powerball drawing took place on ${q.date}.`,
-        'not_found'
-      );
-    }
-
-    return pack(r, one);
+    return pack(result, draws);
   },
 
   '/api/check': async (q) => {
-    const t = parseTicket(q);
+    const ticket = parseTicket(q);
 
-    const r = await getDraws(
-      `date:${t.date}`,
-      'date',
-      { date: t.date },
-      (m) => m.filter((d) => d.date === t.date)
-    );
+    const { result, draws } = await lookup(specs.onDate(ticket.date));
+    const [draw] = draws;
+    if (!draw) throw noDrawError(ticket.date);
 
-    const draw = r.draws.find((d) => d.date === t.date);
-
-    if (!draw) {
-      throw new ApiError(
-        404,
-        `No Powerball drawing took place on ${t.date}.`,
-        'not_found'
-      );
-    }
-
-    const matched = t.numbers.filter(
-      (n) => draw.numbers.includes(n)
-    );
-
-    const pbMatch = t.pb === draw.powerball;
-    const won = prize(matched.length, pbMatch);
+    const matched = ticket.numbers.filter((n) => draw.numbers.includes(n));
+    const powerballMatch = ticket.pb === draw.powerball;
+    const won = prize(matched.length, powerballMatch);
 
     return {
-      ...meta(r),
-      ticket: t,
+      ...meta(result),
+      ticket,
       draw,
       matched,
-      powerballMatch: pbMatch,
+      powerballMatch,
       prize: won,
       won: Boolean(won),
     };
   },
 
   '/api/quickpick': async () => {
-    const set = new Set();
-
-    while (set.size < 5) {
-      set.add(1 + Math.floor(Math.random() * 69));
-    }
+    const whites = new Set();
+    while (whites.size < 5) whites.add(randomInt(1,69));
 
     return {
       server: SERVER_NAME,
-      numbers: [...set].sort((a, b) => a - b),
-      powerball: 1 + Math.floor(Math.random() * 26),
+      numbers: [...whites].sort((a, b) => a - b),
+      powerball: randomInt(1, 26),
     };
   },
 };
 
-/* ---------- response helpers ---------- */
-
-function meta(r) {
-  return {
-    server: SERVER_NAME,
-    source: r.source,
-    warning: r.warning || null,
-  };
-}
-
-function pack(r, draws) {
-  return {
-    ...meta(r),
-    count: draws.length,
-    draws,
-  };
-}
-
-/* ---------- HTTP server ---------- */
-
 function send(res, status, body, headers = {}) {
-  const data = typeof body === 'string'
-    ? body
-    : JSON.stringify(body);
-
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
-    'X-Served-By': SERVER_NAME,
-    'X-Content-Type-Options': 'nosniff',
+    ...COMMON_HEADERS,
     ...headers,
   });
-
-  res.end(data);
+  res.end(typeof body === 'string' ? body : JSON.stringify(body));
 }
 
 function serveStatic(req, res, pathname) {
-  let rel = decodeURIComponent(
-    pathname === '/' ? '/index.html' : pathname
-  );
-
+  const rel = decodeURIComponent(pathname === '/' ? '/index.html' : pathname);
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
 
-  if (
-    !file.startsWith(PUBLIC_DIR + path.sep) &&
-    file !== PUBLIC_DIR
-  ) {
+  const insidePublic = 
+  file.startsWith(PUBLIC_DIR + path.sep) || file === PUBLIC_DIR;
+  if (!insidePublic) {
     return send(res, 403, { error: 'Forbidden' });
   }
 
   fs.readFile(file, (err, buf) => {
-    if (err) {
-      return send(res, 404, { error: 'Not found' });
-    }
+    if (err) return send(res, 404, { error: 'Not found' });
 
     res.writeHead(200, {
-      'Content-Type':
-        MIME[path.extname(file)] || 'application/octet-stream',
-      'X-Served-By': SERVER_NAME,
-      'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy':
-        "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:",
+      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+      ...COMMON_HEADERS,
+      'Content-Security-Policy': STATIC_CSP,
     });
-
     res.end(buf);
+  });
+}
+
+function sendError(res, e) {
+  if (e instanceof ApiError) {
+    return send(res, e.status, { error: e.message, code: e.code });
+  }
+
+  console.error(e);
+  return send(res, 500, {
+    error: 'Something went wrong on the server.',
+    code: 'server',
   });
 }
 
@@ -566,52 +490,33 @@ function createServer() {
       const url = new URL(req.url, 'http://localhost');
 
       if (req.method !== 'GET' && req.method !== 'HEAD') {
-        return send(res, 405, {
-          error: 'Method not allowed',
-        });
+        return send(res, 405, { error: 'Method not allowed' });
       }
 
       const handler = routes[url.pathname];
-
       if (handler) {
-        const q = Object.fromEntries(url.searchParams);
-        return send(res, 200, await handler(q));
+        const query = Object.fromEntries(url.searchParams);
+        return send(res, 200, await handler(query));
       }
 
       if (url.pathname.startsWith('/api/')) {
-        return send(res, 404, {
-          error: 'Unknown API route',
-          code: 'not_found',
-        });
+        return send(res, 404, { error: 'Unknown API route', code: 'not_found' });
       }
 
       return serveStatic(req, res, url.pathname);
-
     } catch (e) {
-      if (e instanceof ApiError) {
-        return send(res, e.status, {
-          error: e.message,
-          code: e.code,
-        });
-      }
-
-      console.error(e);
-
-      return send(res, 500, {
-        error: 'Something went wrong on the server.',
-        code: 'server',
-      });
+      return sendError(res, e);
     }
   });
 }
 
 if (require.main === module) {
-  const c = cfg();
+  const { port, mock } = cfg();
 
-  createServer().listen(c.port, '0.0.0.0', () => {
+  createServer().listen(port, '0.0.0.0', () => {
     console.log(
-      `Powerball Explorer on http://0.0.0.0:${c.port} ` +
-      `[${SERVER_NAME}] mode=${c.mock ? 'DEMO DATA' : 'DRAWANALYTICS'}`
+      `Powerball Explorer on http://0.0.0.0:${port} ` +
+      `[${SERVER_NAME}] mode=${mock ? 'DEMO DATA' : 'DRAWANALYTICS'}`
     );
   });
 }

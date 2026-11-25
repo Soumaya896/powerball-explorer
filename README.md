@@ -1,6 +1,6 @@
 # 🎱 Powerball Explorer
 
-A responsive Powerball results explorer built with Node.js, HTML, CSS and JavaScript. It uses the **New York State Open Data public JSON API** for real historical Powerball winning numbers. No RapidAPI account, API key, subscription or npm dependencies are required.
+A responsive Powerball results explorer built with Node.js, HTML, CSS and Javascript. It uses the DrawAnalystics API for real historical Powerball winning numbers and has no npm dependencies.
 
 - **GitHub:** https://github.com/Soumaya896/powerball-explorer
 - **Demo video (maximum 2 minutes):** add your video URL here after recording
@@ -26,18 +26,13 @@ The application gives users one place to browse historical Powerball drawings, s
 
 ## External API and attribution
 
-**Source:** New York State Open Data, *Lottery Powerball Winning Numbers: Beginning 2010*.
+**Source:** DrawAnalytics, Powerball results (https://www.drawanalytics.com).
 
-- Dataset page: https://data.ny.gov/d/d6yy-54nr
-- Public JSON endpoint: https://data.ny.gov/resource/d6yy-54nr.json
-- Dataset identifier: `d6yy-54nr`
-- API style: Socrata Open Data API (SODA)
-- Authentication: none required for the public read endpoint used by this project.
-- Data fields used: `draw_date`, `winning_numbers`, and `multiplier`.
+- Endpoint used: https://www.drawanalytics.com/api/v1/california/powerball/results
+- Data used by the app: draw date, the five white-ball numbers, the Powerball and the multiplier.
+- Secrets: none are stored in this repository. Any settings or keys go in a local `.env` file, which is excluded by `.gitignore`.
 
-The public endpoint was verified with a request ordered by `draw_date DESC`; its response contains the date, six winning numbers (the sixth is the Powerball), and multiplier. The dataset is published by the New York State Gaming Commission through New York State Open Data. The application links to the dataset in its footer.
-
-This is a public dataset, not an official developer API operated by the Powerball organization. If results are used to make a real-world decision, verify them with the official lottery source.
+DrawAnalytics is a third-party data provider, not an official Powerball service. Verify results with the official lottery source if you use them for a real-world decision.
 
 ## Project structure
 
@@ -70,7 +65,7 @@ Requirements: Node.js 18 or newer.
 
 1. Download or clone this repository.
 2. Open Command Prompt in the project folder.
-3. Optional: copy `.env.example` to `.env`. The defaults already use the public API; no secret needs to be added.
+3. Optional: copy `.env.example` to `.env`and adjust the settings if needed.
 4. Install dependencies (there are none, but this confirms the npm project is readable):
 
    ```bash
@@ -95,7 +90,7 @@ npm test
 
 ### Optional demo mode
 
-To use generated sample data instead of making live API requests, set `USE_MOCK=true` in `.env`, then restart the server. Set it to `false` (or remove it) to use the live public dataset.
+To use generated sample data instead of making live API requests, set `USE_MOCK=true` in `.env`, then restart the server. Set it to `false` (or remove it) to use the live public DrawAnalytics data.
 
 ## API routes provided by this application
 
@@ -110,7 +105,7 @@ To use generated sample data instead of making live API requests, set `USE_MOCK=
 | `GET /api/check?numbers=1,2,3,4,5&powerball=6&date=YYYY-MM-DD` | Compare a ticket with a drawing |
 | `GET /api/quickpick` | Generate a random valid ticket |
 
-The backend calls the public Socrata endpoint, normalizes its response into a consistent structure, and never exposes upstream implementation details to the browser. The external data service is read-only.
+The backend calls the DrawAnalytics endpoint, normalizes its response into a consistent structure, and never exposes upstream implementation details to the browser. The external data service is read-only.
 
 ## Deployment architecture
 
@@ -150,7 +145,7 @@ cd powerball-explorer/deploy
 sudo SERVER_NAME=web-02 REPO_URL=https://github.com/Soumaya896/powerball-explorer.git bash setup-webserver.sh
 ```
 
-The script creates `/opt/powerball-explorer/.env` from `.env.example` when needed. No API key is required. Test each web server:
+The script creates `/opt/powerball-explorer/.env` from `.env.example` when needed. Test each web server:
 
 ```bash
 curl -i http://localhost/api/health
@@ -211,7 +206,7 @@ Actual IP addresses and successful deployment must be filled in and verified in 
 
 ## Security and reliability
 
-- No API key or password is needed for the public dataset.
+- No secrets are stored in this repository; any keys or settings go in a local `.env` file.
 - `.env` is excluded by `.gitignore`; do not commit secrets if additional services are introduced later.
 - External requests are made by the Node.js backend.
 - User-supplied dates and ticket numbers are validated server-side.
@@ -223,16 +218,15 @@ Actual IP addresses and successful deployment must be filled in and verified in 
 
 | Challenge | Solution |
 |---|---|
-| RapidAPI registration did not work | Replaced the dependency with a public New York State Open Data JSON endpoint that does not require registration or a key. |
-| Upstream data fields differ from the app's internal format | The normalizer converts the public dataset's date, winning-number string and multiplier into a consistent draw object. |
+| The New York State Open Data endpoint returned HTTP 403 errors | Switched to the DrawAnalytics API, then rewrote the response normalizer and the automated tests to match it. |
+| DrawAnalytics fields differ from the app's internal format | The normalizer converts the date, winning numbers and multiplier into one constitent draw object. |
 | Public API may be unavailable | Added request timeout, retry, caching and stale-cache fallback. |
 | Need to demonstrate which web server handled a request | Added `X-Served-By` response header and a server badge in the interface. |
 | Need to test without relying on internet access | Kept an optional sample-data mode and automated tests. |
 
 ## Credits
 
-- New York State Gaming Commission / New York State Open Data: [Powerball winning numbers dataset](https://data.ny.gov/d/d6yy-54nr).
-- Socrata: [Open Data API documentation](https://dev.socrata.com/).
+- DrawAnalytics: [Powerball results data] (https://www.drawanalytics.com).
 - Node.js: https://nodejs.org/.
 - nginx: https://nginx.org/.
 - Powerball prize information: https://www.powerball.com/powerball-prize-chart.

@@ -1,7 +1,7 @@
 {
   "name": "powerball-explorer",
   "version": "1.0.0",
-  "description": "Powerball results explorer using New York State public Open Data: search, filters, statistics and ticket checking.",
+  "description": "Powerball results explorer using the DrawAnalytics API: search, filters, statistics, ticket checking and Quick Pick.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
